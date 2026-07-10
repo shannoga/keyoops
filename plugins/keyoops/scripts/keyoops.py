@@ -26,6 +26,8 @@ import sys
 import os
 import re
 import json
+import marshal
+import hashlib
 
 # --- Language profiles -------------------------------------------------------
 # You declare the languages you type (e.g. ["he","en","ar"]) in the config, and
@@ -97,30 +99,64 @@ DEFAULT_LANGUAGES = ['en', 'he']
 CLAUDE_DIR = os.path.join(os.path.expanduser('~'), '.claude')
 CONFIG_PATH = os.path.join(CLAUDE_DIR, 'keyoops.config.json')
 DICTS_DIR = os.path.join(CLAUDE_DIR, 'keyoops-dicts')
+CACHE_DIR = os.path.join(CLAUDE_DIR, 'keyoops-cache')
 
 _EDGE_PUNCT = " \t\r\n\"'`.,!?;:()[]{}<>-–—…/\\|@#*_~"
 
 
-def load_wordset(path):
-    """Load a wordlist into a lowercased set.
+def _parse_wordlist(path):
+    """Parse a wordlist file into a lowercased set (the slow path).
 
     Handles plain one-word-per-line lists AND hunspell .dic files, whose lines
     look like "word/AFFIXFLAGS" (and whose first line is an entry count). We take
     the first whitespace token and drop anything after a '/'.
     """
+    words = set()
+    with open(path, encoding='utf-8', errors='ignore') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            w = line.split()[0].split('/', 1)[0].strip().lower()
+            if w:
+                words.add(w)
+    return words
+
+
+def load_wordset(path):
+    """Load a wordlist as a lowercased set, using a marshal cache keyed by mtime.
+
+    The hook runs as a fresh process per prompt, so re-parsing a multi-MB .dic
+    every time is the main latency cost. We cache the parsed set to a binary
+    (marshal) file; subsequent loads just deserialize it (much faster) as long as
+    the source file's mtime is unchanged.
+    """
     try:
-        words = set()
-        with open(path, encoding='utf-8', errors='ignore') as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                w = line.split()[0].split('/', 1)[0].strip().lower()
-                if w:
-                    words.add(w)
-        return words
+        mtime = os.path.getmtime(path)
     except OSError:
         return None
+    cache = os.path.join(
+        CACHE_DIR, hashlib.md5(os.path.abspath(path).encode()).hexdigest() + '.marshal')
+    try:
+        with open(cache, 'rb') as f:
+            stored_mtime, words = marshal.load(f)
+        if stored_mtime == mtime and isinstance(words, set):
+            return words
+    except (OSError, EOFError, ValueError, TypeError):
+        pass  # missing/stale/corrupt cache — rebuild below
+    try:
+        words = _parse_wordlist(path)
+    except OSError:
+        return None
+    try:  # best-effort cache write; never fatal
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        tmp = cache + '.tmp'
+        with open(tmp, 'wb') as f:
+            marshal.dump((mtime, words), f)
+        os.replace(tmp, cache)
+    except OSError:
+        pass
+    return words
 
 
 def decode(text, char_map):
@@ -325,6 +361,8 @@ def make_direction(src, tgt, overrides):
                 for ch, key in src_char_to_key.items()}
     return {
         'name': f'{src}-layout-to-{tgt}',
+        'src': src,
+        'tgt': tgt,
         'char_map': char_map,
         'src_re': S['script_re'],
         'wordlist_path': resolve_wordlist(tgt, overrides),
@@ -336,6 +374,26 @@ def resolve_directions(codes, overrides):
     """Every ordered pair among the declared languages (source != target)."""
     return [make_direction(s, t, overrides)
             for s in codes for t in codes if s != t]
+
+
+def skippable_latin_direction(prompt, en_wordset):
+    """True if an English-layout -> other-language direction can be skipped.
+
+    A real scramble into another language looks like a run of >=2 adjacent Latin
+    tokens that are NOT valid English — the exact thing the flag gate needs. If
+    the message has no such run, the direction could never fire, so we skip
+    loading its (large) target dictionary. This changes NO detection outcomes;
+    it only avoids needless work on ordinary English text.
+    """
+    flags = []  # per Latin word-token: True if it is NOT a real English word
+    for part in re.split(r'\s+', prompt):
+        c = core(part)
+        if c and LATIN_RE.search(c):
+            flags.append(c.lower() not in en_wordset)
+    if len(flags) <= 1:
+        return False  # too short to judge — don't skip (single-token case)
+    non_en = [i for i, bad in enumerate(flags) if bad]
+    return longest_run(non_en) < 2
 
 
 def main():
@@ -350,7 +408,31 @@ def main():
 
     codes, overrides, auto_modes = load_config()
     wordset_cache = {}
+
+    # For English-layout -> other-language directions, we can often skip loading
+    # the big target dict by pre-checking against the (small, cached) English
+    # list. Load it once if English is configured.
+    en_wordset = None
+    if 'en' in codes:
+        en_path = resolve_wordlist('en', overrides)
+        if en_path:
+            en_wordset = load_wordset(en_path)
+            wordset_cache[en_path] = en_wordset
+
     for direction in resolve_directions(codes, overrides):
+        # Cheap pre-filter: a direction can only fire if the prompt actually
+        # contains characters in its source script. This skips the (possibly
+        # multi-MB) wordlist load for directions that can't apply — e.g. the
+        # English->Hebrew check never loads he.dic for a Latin-only message that
+        # has no Hebrew, and vice versa.
+        if not direction['src_re'].search(prompt):
+            continue
+        # For en -> (he/ar/ru), skip when the message shows no multi-word Latin
+        # scramble (ordinary English never loads the big target dictionary).
+        if (direction['src'] == 'en' and direction['tgt'] != 'en'
+                and en_wordset is not None
+                and skippable_latin_direction(prompt, en_wordset)):
+            continue
         path = direction['wordlist_path']
         if not path:
             continue          # target language's wordlist not installed — skip
