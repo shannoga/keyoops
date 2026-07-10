@@ -95,9 +95,23 @@ _EDGE_PUNCT = " \t\r\n\"'`.,!?;:()[]{}<>-–—…/\\|@#*_~"
 
 
 def load_wordset(path):
+    """Load a wordlist into a lowercased set.
+
+    Handles plain one-word-per-line lists AND hunspell .dic files, whose lines
+    look like "word/AFFIXFLAGS" (and whose first line is an entry count). We take
+    the first whitespace token and drop anything after a '/'.
+    """
     try:
+        words = set()
         with open(path, encoding='utf-8', errors='ignore') as f:
-            return {w.strip().lower() for w in f if w.strip()}
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                w = line.split()[0].split('/', 1)[0].strip().lower()
+                if w:
+                    words.add(w)
+        return words
     except OSError:
         return None
 
