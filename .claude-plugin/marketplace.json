@@ -1,5 +1,5 @@
 {
-  "name": "layout-scramble",
+  "name": "keyoops",
   "owner": {
     "name": "Shani Hajbi"
   },
@@ -8,8 +8,8 @@
   },
   "plugins": [
     {
-      "name": "layout-scramble",
-      "source": "./plugins/layout-scramble",
+      "name": "keyoops",
+      "source": "./plugins/keyoops",
       "description": "Detects wrong-keyboard-layout typing (e.g. Hebrew keys while intending English) and asks to confirm the decoded text before acting.",
       "version": "1.0.0",
       "author": {

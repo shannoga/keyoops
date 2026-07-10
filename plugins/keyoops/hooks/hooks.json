@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/detect-layout-scramble.py\"",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/keyoops.py\"",
             "timeout": 10
           }
         ]

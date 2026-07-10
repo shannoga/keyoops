@@ -1,6 +1,6 @@
 {
   "_help": [
-    "OPTIONAL config. Copy this file to  ~/.claude/layout-scramble.config.json  and edit.",
+    "OPTIONAL config. Copy this file to  ~/.claude/keyoops.config.json  and edit.",
     "List the languages YOU type in 'languages'. The hook checks every pair:",
     "for each language the layout might have been ON, it decodes to each other",
     "language and flags if real words fall out. Codes: en, he, ar, ru.",

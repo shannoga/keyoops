@@ -1,9 +1,9 @@
-# layout-scramble
+# keyoops
 
 A Claude Code plugin that catches prompts typed with the **wrong keyboard layout**.
 
 You meant to type English but the OS was on Hebrew, so `hello` came out as `יקךךם`?
-This plugin notices, decodes it back to what you meant, and asks Claude to confirm
+`keyoops` notices, decodes it back to what you meant, and asks Claude to confirm
 before doing anything:
 
 > Looks like the wrong keyboard layout — did you mean: **hello add a button**? go with it?
@@ -16,8 +16,8 @@ out, it flags; otherwise it stays silent. It **never blocks** — worst case is 
 ## Install
 
 ```
-/plugin marketplace add shannoga/layout-scramble
-/plugin install layout-scramble
+/plugin marketplace add shannoga/keyoops
+/plugin install keyoops@keyoops
 ```
 
 The hook registers automatically — no `settings.json` editing. Restart your
@@ -29,8 +29,8 @@ By default it catches **Hebrew-layout → English**. To change which languages i
 watches, copy the example config to your home and edit it:
 
 ```
-cp "$(/plugin root layout-scramble)/layout-scramble.config.example.json" \
-   ~/.claude/layout-scramble.config.json
+cp "$(/plugin root keyoops)/keyoops.config.example.json" \
+   ~/.claude/keyoops.config.json
 ```
 
 Then list the languages you type:
@@ -45,11 +45,22 @@ Supported codes: `en`, `he`, `ar`, `ru`.
 
 Config lives in `~/.claude/` so plugin updates never overwrite it.
 
-### Non-English targets
+## Non-English targets (installing a dictionary)
 
-English works out of the box (a wordlist is bundled). Detecting gibberish that
-decodes to **real Hebrew/Arabic/Russian** needs that language's wordlist
-installed — then point `wordlists` at it:
+English works out of the box — a wordlist ships inside the plugin. To detect
+gibberish that decodes to **real Hebrew / Arabic / Russian**, that language needs
+its own wordlist, because those don't ship with macOS.
+
+A "dictionary" here is just a plain text file with one word per line. Install one
+via [hunspell](https://github.com/hunspell) dictionaries, then point the config at
+the `.dic` file:
+
+```bash
+# macOS
+brew install hunspell
+# then grab a dictionary, e.g. Hebrew, and note its path:
+#   /opt/homebrew/share/hunspell/he_IL.dic
+```
 
 ```json
 {
@@ -57,6 +68,10 @@ installed — then point `wordlists` at it:
   "wordlists": { "he": "/opt/homebrew/share/hunspell/he_IL.dic" }
 }
 ```
+
+Any one-word-per-line text file works — a hunspell `.dic`, an aspell dump, or your
+own list. If the path in `wordlists` doesn't exist, that direction is simply
+skipped (never an error).
 
 ## How it stays quiet on real text
 

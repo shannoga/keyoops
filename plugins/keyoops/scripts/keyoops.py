@@ -15,12 +15,12 @@ confident hit, prints a hookSpecificOutput JSON with `additionalContext` and
 exits 0. Otherwise prints nothing and exits 0.
 
 You declare the languages you type in an optional config file,
-layout-scramble.config.json, next to this script (e.g. {"languages":["he","en",
-"ar"]}). The hook then checks every ordered pair among them — for each language
-the layout might have been ON, it decodes to each OTHER language and flags if
-real words fall out. With no config it defaults to ["en","he"]. A direction only
-runs if the target language's wordlist exists (macOS ships English only; install
-a Hebrew/Arabic wordlist and point the config's "wordlists" at it).
+~/.claude/keyoops.config.json (e.g. {"languages":["he","en","ar"]}). The hook
+then checks every ordered pair among them — for each language the layout might
+have been ON, it decodes to each OTHER language and flags if real words fall out.
+With no config it defaults to ["en","he"]. A direction only runs if the target
+language's wordlist exists (macOS ships English only; install a Hebrew/Arabic/
+Russian wordlist and point the config's "wordlists" at it).
 """
 import sys
 import os
@@ -89,7 +89,7 @@ DEFAULT_LANGUAGES = ['en', 'he']
 # Config lives in the user's home (not next to the script) so a plugin update
 # never clobbers it.
 CONFIG_PATH = os.path.join(os.path.expanduser('~'), '.claude',
-                           'layout-scramble.config.json')
+                           'keyoops.config.json')
 
 _EDGE_PUNCT = " \t\r\n\"'`.,!?;:()[]{}<>-–—…/\\|@#*_~"
 
