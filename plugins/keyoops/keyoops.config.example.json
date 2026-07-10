@@ -8,8 +8,15 @@
     "English works out of the box (bundled wordlist). For he/ar/ru as a TARGET,",
     "install a wordlist and point 'wordlists' at it, e.g.:",
     "  \"wordlists\": { \"he\": \"/opt/homebrew/share/hunspell/he_IL.dic\" }",
-    "With no config file at all, the default is [\"en\", \"he\"]."
+    "With no config file at all, the default is [\"en\", \"he\"].",
+    "",
+    "'auto_apply_modes': permission modes where a correction is applied WITHOUT",
+    "asking (Claude just announces it). Only pure single-language scrambles auto-",
+    "apply; mixed messages always ask. Default: [\"bypassPermissions\"]. Add",
+    "\"dontAsk\" to include it, or set [] to always ask. Valid: default, plan,",
+    "acceptEdits, auto, dontAsk, bypassPermissions. Or use `/keyoops autoapply`."
   ],
   "languages": ["en", "he"],
-  "wordlists": {}
+  "wordlists": {},
+  "auto_apply_modes": ["bypassPermissions"]
 }

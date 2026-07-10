@@ -177,8 +177,21 @@ def analyze(prompt, direction, wordset):
     scrambled_pos = [n for n, t in enumerate(tokens) if t[1]]
     strong_pos = [n for n, t in enumerate(tokens) if t[4]]
     src_pos = [n for n, t in enumerate(tokens) if t[3]]
+
+    # "pure" = the whole message is in the source script (no foreign real words
+    # mixed in). Used to gate auto-apply: only fully-scrambled messages skip the
+    # confirmation, mixed ones always ask.
+    pure = True
+    for part in parts:
+        if not part or part.isspace():
+            continue
+        c = core(part)
+        if any(ch.isalpha() for ch in c) and not src_re.search(c):
+            pure = False
+            break
+
     if not scrambled_pos:
-        return False, prompt
+        return False, prompt, pure
 
     # --- Anti-false-positive gate ---
     if len(tokens) == 1:
@@ -193,34 +206,37 @@ def analyze(prompt, direction, wordset):
                 or (len(scrambled_pos) >= len(src_pos) and bool(strong_pos)))
 
     if not flag:
-        return False, prompt
+        return False, prompt, pure
 
     rebuilt = list(parts)
     for part_index, is_scr, decoded_part, _, _ in tokens:
         if is_scr:
             rebuilt[part_index] = decoded_part
-    return True, ''.join(rebuilt)
+    return True, ''.join(rebuilt), pure
 
 
-# Modes where the user has opted into full autonomy: auto-apply the correction
-# and just announce it, instead of asking for a yes/no first.
-AUTO_APPLY_MODES = ('bypassPermissions',)
+# Permission modes eligible for auto-apply by default. Overridable in config via
+# "auto_apply_modes". Valid modes: default, plan, acceptEdits, auto, dontAsk,
+# bypassPermissions. ("dontAsk" is available but off by default.)
+DEFAULT_AUTO_APPLY_MODES = ['bypassPermissions']
+VALID_MODES = ('default', 'plan', 'acceptEdits', 'auto', 'dontAsk',
+               'bypassPermissions')
 
 
-def build_context(decoded, permission_mode, desc):
+def build_context(decoded, desc, auto):
     intro = (
         f"The user's prompt looks like it was typed with the wrong keyboard "
         f"layout ({desc}), so it reads as gibberish. Decoded to the likely "
         f"intended text: \"{decoded}\". "
     )
-    if permission_mode in AUTO_APPLY_MODES:
+    if auto:
         # No confirmation gate — proceed, but tell the user what was corrected.
         return (
             intro +
-            "Bypass-permissions is on, so proceed directly using the decoded "
-            "text — do NOT ask for confirmation. Briefly tell the user you "
-            "caught a keyboard-layout mistake and are using the decoded text "
-            "instead of the original. Never act on the original scrambled text."
+            "You have permission to proceed without confirmation, so use the "
+            "decoded text directly — do NOT ask a yes/no first. Briefly tell the "
+            "user you caught a keyboard-layout mistake and are using the decoded "
+            "text instead of the original. Never act on the original scramble."
         )
     return (
         intro +
@@ -232,22 +248,23 @@ def build_context(decoded, permission_mode, desc):
 
 
 def load_config():
-    """Read the optional config file. Returns (language_codes, wordlist_overrides).
+    """Read the optional config file. Returns (codes, overrides, auto_apply_modes).
 
     Config shape (all fields optional):
         {
           "languages": ["he", "en", "ar"],
-          "wordlists": {"he": "/path/to/he_IL.dic", "ar": "/path/to/ar.dic"}
+          "wordlists": {"he": "/path/to/he_IL.dic", "ar": "/path/to/ar.dic"},
+          "auto_apply_modes": ["bypassPermissions"]
         }
     'languages' may also be a comma string ("he,en,ar"). Missing/unreadable/
-    invalid config falls back to the default, so a bad edit never breaks
+    invalid config falls back to the defaults, so a bad edit never breaks
     prompting.
     """
     try:
         with open(CONFIG_PATH, encoding='utf-8') as f:
             cfg = json.load(f)
     except (OSError, json.JSONDecodeError, ValueError):
-        return DEFAULT_LANGUAGES, {}
+        return DEFAULT_LANGUAGES, {}, list(DEFAULT_AUTO_APPLY_MODES)
     langs = cfg.get('languages')
     if isinstance(langs, str):
         langs = langs.split(',')
@@ -265,7 +282,15 @@ def load_config():
     overrides = cfg.get('wordlists')
     if not isinstance(overrides, dict):
         overrides = {}
-    return codes, overrides
+    # auto_apply_modes: absent -> default; explicit [] -> never auto-apply.
+    modes = cfg.get('auto_apply_modes')
+    if isinstance(modes, str):
+        modes = modes.split(',')
+    if not isinstance(modes, list):
+        auto_modes = list(DEFAULT_AUTO_APPLY_MODES)
+    else:
+        auto_modes = [str(m).strip() for m in modes if str(m).strip() in VALID_MODES]
+    return codes, overrides, auto_modes
 
 
 def _invert(key_to_char):
@@ -323,7 +348,7 @@ def main():
     if not prompt.strip():
         return 0
 
-    codes, overrides = load_config()
+    codes, overrides, auto_modes = load_config()
     wordset_cache = {}
     for direction in resolve_directions(codes, overrides):
         path = direction['wordlist_path']
@@ -334,13 +359,16 @@ def main():
         wordset = wordset_cache[path]
         if not wordset:
             continue
-        flagged, decoded = analyze(prompt, direction, wordset)
+        flagged, decoded, pure = analyze(prompt, direction, wordset)
         if flagged and decoded.strip() and decoded != prompt:
+            # Auto-apply only when the mode allows it AND the message is a pure
+            # single-language scramble (mixed messages always ask, to be safe).
+            auto = permission_mode in auto_modes and pure
             out = {
                 "hookSpecificOutput": {
                     "hookEventName": "UserPromptSubmit",
                     "additionalContext": build_context(
-                        decoded, permission_mode, direction['desc']),
+                        decoded, direction['desc'], auto),
                 }
             }
             print(json.dumps(out, ensure_ascii=False))
@@ -430,6 +458,11 @@ def cmd_list():
             print(f'  {code} ({label}): missing — run `keyoops add {code}` to download')
         else:
             print(f'  {code} ({label}): no dictionary available')
+    modes = cfg.get('auto_apply_modes')
+    if not isinstance(modes, list):
+        modes = DEFAULT_AUTO_APPLY_MODES
+    shown = ', '.join(modes) if modes else '(none — always ask)'
+    print(f'auto-apply (skip confirmation) in modes: {shown}')
     return 0
 
 
@@ -503,10 +536,48 @@ def cmd_remove(code):
     return 0
 
 
+def cmd_autoapply(spec=None):
+    """Show or set the permission modes where corrections auto-apply (no y/n)."""
+    cfg = load_config_raw()
+    if spec is None:
+        modes = cfg.get('auto_apply_modes')
+        if not isinstance(modes, list):
+            modes = DEFAULT_AUTO_APPLY_MODES
+        print('auto-apply modes:', ', '.join(modes) if modes else '(none — always ask)')
+        print('valid modes:', ', '.join(VALID_MODES))
+        print('set with: keyoops autoapply <mode[,mode…] | off | default>')
+        return 0
+    spec = spec.strip().lower()
+    if spec in ('off', 'none'):
+        modes = []
+    elif spec == 'default':
+        modes = list(DEFAULT_AUTO_APPLY_MODES)
+    else:
+        requested = [m.strip() for m in spec.split(',') if m.strip()]
+        valid_lower = {m.lower(): m for m in VALID_MODES}
+        bad = [m for m in requested if m.lower() not in valid_lower]
+        if bad:
+            print(f"unknown mode(s): {', '.join(bad)}")
+            print('valid modes:', ', '.join(VALID_MODES))
+            return 1
+        # dedupe, preserve canonical casing
+        seen, modes = set(), []
+        for m in requested:
+            canon = valid_lower[m.lower()]
+            if canon not in seen:
+                seen.add(canon)
+                modes.append(canon)
+    cfg['auto_apply_modes'] = modes
+    write_config(cfg)
+    print('auto-apply modes:', ', '.join(modes) if modes else '(none — always ask)')
+    print('Active on your next prompt.')
+    return 0
+
+
 def cli(argv):
     import argparse
     p = argparse.ArgumentParser(
-        prog='keyoops', description='Manage keyoops keyboard-layout languages.')
+        prog='keyoops', description='Manage keyoops keyboard-layout settings.')
     sub = p.add_subparsers(dest='cmd')
     sub.add_parser('list', help='show configured languages + dictionary status')
     a = sub.add_parser('add', help='add a language (auto-downloads its dictionary)')
@@ -514,6 +585,10 @@ def cli(argv):
                    + ' (omit for a selection menu)')
     r = sub.add_parser('remove', help='remove a language')
     r.add_argument('lang')
+    aa = sub.add_parser('autoapply',
+                        help='show/set modes that skip confirmation (e.g. '
+                             'bypassPermissions,dontAsk | off | default)')
+    aa.add_argument('modes', nargs='?')
     args = p.parse_args(argv)
     if args.cmd == 'list':
         return cmd_list()
@@ -521,6 +596,8 @@ def cli(argv):
         return cmd_add(args.lang)
     if args.cmd == 'remove':
         return cmd_remove(args.lang)
+    if args.cmd == 'autoapply':
+        return cmd_autoapply(args.modes)
     p.print_help()
     return 0
 
