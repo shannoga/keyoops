@@ -150,48 +150,53 @@ def analyze(prompt, direction, wordset):
 
     # Split keeping whitespace so we can reconstruct spacing exactly.
     parts = re.split(r'(\s+)', prompt)
-    tokens = []          # (part_index, is_scrambled, decoded_part, has_src)
+    tokens = []          # (part_index, is_scrambled, decoded_part, has_src, strong)
     for i, part in enumerate(parts):
         if not part or part.isspace():
             continue
         c = core(part)
         if not c:
-            tokens.append((i, False, part, False))
+            tokens.append((i, False, part, False, False))
             continue
         has_src = bool(src_re.search(c))
         if c.lower() in wordset:                       # already a real word
-            tokens.append((i, False, part, has_src))
+            tokens.append((i, False, part, has_src, False))
         elif has_src:
             dec_core = core(decode(c, char_map))
             if dec_core.lower() in wordset:            # decodes to a real target word
-                tokens.append((i, True, decode(part, char_map), True))
+                # "strong" = a >=3 char decode; short decodes (a, as, to -> real
+                # but tiny target words) are coincidence-prone and don't carry a
+                # flag on their own.
+                strong = len(dec_core) >= 3
+                tokens.append((i, True, decode(part, char_map), True, strong))
             else:
-                tokens.append((i, False, part, True))  # genuine source-language
+                tokens.append((i, False, part, True, False))  # genuine source-lang
         else:
-            tokens.append((i, False, part, has_src))
+            tokens.append((i, False, part, has_src, False))
 
     scrambled_pos = [n for n, t in enumerate(tokens) if t[1]]
+    strong_pos = [n for n, t in enumerate(tokens) if t[4]]
     src_pos = [n for n, t in enumerate(tokens) if t[3]]
     if not scrambled_pos:
         return False, prompt
 
     # --- Anti-false-positive gate ---
     if len(tokens) == 1:
-        # Lone word: can't compare against context; require a real, non-trivial
-        # decode. (Residual risk is cheap — Claude still asks first.)
-        dec_core = core(tokens[0][2])
-        flag = len(dec_core) >= 3
+        # Lone word: require a strong (>=3 char) decode. Cheap even if wrong —
+        # Claude still asks first.
+        flag = bool(strong_pos)
     else:
-        # Flag a contiguous run of >=2 scrambled tokens, OR when every
-        # source-script token in the message is scrambled (a full slip),
-        # never a lone coincidental word among real source-language text.
-        flag = longest_run(scrambled_pos) >= 2 or len(scrambled_pos) >= len(src_pos)
+        # Real evidence = a contiguous run of >=2 STRONG decodes, OR a full slip
+        # where every source-script token decodes (and at least one is strong).
+        # A couple of scattered short coincidences never fire.
+        flag = (longest_run(strong_pos) >= 2
+                or (len(scrambled_pos) >= len(src_pos) and bool(strong_pos)))
 
     if not flag:
         return False, prompt
 
     rebuilt = list(parts)
-    for part_index, is_scr, decoded_part, _ in tokens:
+    for part_index, is_scr, decoded_part, _, _ in tokens:
         if is_scr:
             rebuilt[part_index] = decoded_part
     return True, ''.join(rebuilt)
@@ -417,8 +422,35 @@ def cmd_list():
     return 0
 
 
-def cmd_add(code):
-    code = code.strip().lower()
+def pick_language():
+    """Show a numbered menu of supported languages and return the chosen code.
+
+    Interactive when attached to a terminal; otherwise prints the list and
+    returns None (the /keyoops command drives selection via Claude instead).
+    """
+    codes = list(LANGUAGES)
+    print('Select a language to add:')
+    for n, c in enumerate(codes, 1):
+        print(f'  {n}) {c} — {LANGUAGES[c]["label"]}')
+    if not sys.stdin.isatty():
+        print('Re-run as `keyoops add <code>` with one of:', ', '.join(codes))
+        return None
+    try:
+        choice = input('Enter number or code: ').strip().lower()
+    except EOFError:
+        return None
+    if choice.isdigit():
+        i = int(choice) - 1
+        return codes[i] if 0 <= i < len(codes) else None
+    return choice if choice in LANGUAGES else None
+
+
+def cmd_add(code=None):
+    code = (code or '').strip().lower()
+    if not code:
+        code = pick_language()
+        if not code:
+            return 1
     if code not in LANGUAGES:
         print(f"unknown language '{code}'. supported: {', '.join(LANGUAGES)}")
         return 1
@@ -467,7 +499,8 @@ def cli(argv):
     sub = p.add_subparsers(dest='cmd')
     sub.add_parser('list', help='show configured languages + dictionary status')
     a = sub.add_parser('add', help='add a language (auto-downloads its dictionary)')
-    a.add_argument('lang', help='language code: ' + ', '.join(LANGUAGES))
+    a.add_argument('lang', nargs='?', help='language code: ' + ', '.join(LANGUAGES)
+                   + ' (omit for a selection menu)')
     r = sub.add_parser('remove', help='remove a language')
     r.add_argument('lang')
     args = p.parse_args(argv)

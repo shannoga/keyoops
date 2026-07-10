@@ -30,7 +30,8 @@ watches right from Claude Code — no file editing:
 
 ```
 /keyoops list            # show your languages + dictionary status
-/keyoops add ru          # add Russian (auto-downloads its dictionary)
+/keyoops add             # pick a language from a menu (auto-downloads its dictionary)
+/keyoops add ru          # …or name it directly
 /keyoops remove ru       # remove Russian
 ```
 
