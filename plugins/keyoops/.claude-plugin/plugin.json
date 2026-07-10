@@ -1,7 +1,7 @@
 {
   "name": "keyoops",
   "description": "Detects wrong-keyboard-layout typing (e.g. Hebrew keys while intending English) and asks to confirm the decoded text before Claude acts on it. Configurable per language; ships a bundled English wordlist.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": {
     "name": "Shani Hajbi"
   },
