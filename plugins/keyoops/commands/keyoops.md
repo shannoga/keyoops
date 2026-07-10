@@ -1,6 +1,6 @@
 ---
-description: Manage keyoops — list/add/remove keyboard-layout languages, or set autoapply (skip-confirmation) modes
-argument-hint: "[list | add [lang] | remove <lang> | autoapply [modes|off|default]]"
+description: Manage keyoops — list/add/remove keyboard-layout languages, set autoapply modes, or run selftest
+argument-hint: "[list | add [lang] | remove <lang> | autoapply [modes|off|default] | selftest]"
 allowed-tools: Bash, AskUserQuestion
 ---
 
@@ -33,7 +33,12 @@ Decide what to do from the arguments the user gave (`$ARGUMENTS`):
   `auto`, `dontAsk`, `bypassPermissions`. Set with e.g.
   `autoapply bypassPermissions,dontAsk`, `autoapply off`, or `autoapply default`.
 
-- **Anything else** (`add <lang>`, `remove <lang>`, `list`,
+- **`selftest`** → run built-in correctness + timing checks:
+  ```bash
+  python3 "${CLAUDE_PLUGIN_ROOT}/scripts/keyoops.py" selftest
+  ```
+
+- **Anything else** (`add <lang>`, `remove <lang>`, `list`, `selftest`,
   `autoapply <modes|off|default>`) → run the script with those arguments directly:
   ```bash
   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/keyoops.py" $ARGUMENTS

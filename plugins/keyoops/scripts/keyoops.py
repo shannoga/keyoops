@@ -396,17 +396,13 @@ def skippable_latin_direction(prompt, en_wordset):
     return longest_run(non_en) < 2
 
 
-def main():
-    try:
-        data = json.load(sys.stdin)
-    except (json.JSONDecodeError, ValueError):
-        return 0
-    prompt = data.get('prompt') or ''
-    permission_mode = data.get('permission_mode') or 'default'
-    if not prompt.strip():
-        return 0
+def detect(prompt, codes, overrides, auto_modes, permission_mode):
+    """Core detection shared by the hook and `selftest`.
 
-    codes, overrides, auto_modes = load_config()
+    Returns (decoded, desc, auto) for the first firing direction, else None.
+    Builds a fresh in-process wordset cache per call (like a real per-prompt hook
+    run); the on-disk marshal cache keeps repeated loads fast.
+    """
     wordset_cache = {}
 
     # For English-layout -> other-language directions, we can often skip loading
@@ -446,15 +442,31 @@ def main():
             # Auto-apply only when the mode allows it AND the message is a pure
             # single-language scramble (mixed messages always ask, to be safe).
             auto = permission_mode in auto_modes and pure
-            out = {
-                "hookSpecificOutput": {
-                    "hookEventName": "UserPromptSubmit",
-                    "additionalContext": build_context(
-                        decoded, direction['desc'], auto),
-                }
+            return decoded, direction['desc'], auto
+    return None
+
+
+def main():
+    try:
+        data = json.load(sys.stdin)
+    except (json.JSONDecodeError, ValueError):
+        return 0
+    prompt = data.get('prompt') or ''
+    permission_mode = data.get('permission_mode') or 'default'
+    if not prompt.strip():
+        return 0
+
+    codes, overrides, auto_modes = load_config()
+    res = detect(prompt, codes, overrides, auto_modes, permission_mode)
+    if res:
+        decoded, desc, auto = res
+        out = {
+            "hookSpecificOutput": {
+                "hookEventName": "UserPromptSubmit",
+                "additionalContext": build_context(decoded, desc, auto),
             }
-            print(json.dumps(out, ensure_ascii=False))
-            return 0
+        }
+        print(json.dumps(out, ensure_ascii=False))
     return 0
 
 
@@ -656,12 +668,53 @@ def cmd_autoapply(spec=None):
     return 0
 
 
+def cmd_selftest():
+    """Run built-in cases against the live config: correctness + timing."""
+    import time
+    codes, overrides, auto_modes = load_config()
+    # (label, prompt, expect_flag, target_needed)
+    cases = [
+        ('normal English', 'can we ship this feature today', False, None),
+        ('he->en scramble', 'יקךךם add a button', True, 'en'),
+        ('en->he scramble', 'tz nv eurv gfahu', True, 'he'),
+        ('real Hebrew', 'שלום חבר מה נשמע', False, None),
+        ('single word', 'טקד', True, 'en'),
+    ]
+    print('keyoops self-test')
+    print('languages:', ', '.join(codes),
+          '| auto-apply:', ', '.join(auto_modes) or '(none)')
+    # warm caches once so timings reflect steady state
+    for _, pr, _, _ in cases:
+        detect(pr, codes, overrides, auto_modes, 'default')
+
+    print(f"\n{'case':<18}{'result':<8}{'time':>8}   detail")
+    print('-' * 58)
+    passed = total = 0
+    for label, pr, expect, needs in cases:
+        if needs and not resolve_wordlist(needs, overrides):
+            print(f"{label:<18}{'SKIP':<8}{'—':>8}   needs '{needs}' dictionary")
+            continue
+        t = time.perf_counter()
+        res = detect(pr, codes, overrides, auto_modes, 'default')
+        ms = (time.perf_counter() - t) * 1000
+        ok = (res is not None) == expect
+        total += 1
+        passed += ok
+        detail = res[0] if res else '(silent)'
+        print(f"{label:<18}{'PASS' if ok else 'FAIL':<8}{ms:>6.0f} ms   {detail}")
+    print('-' * 58)
+    print(f"{passed}/{total} passed  ·  timings are in-process; add ~55-65 ms "
+          "Python startup for real per-prompt cost")
+    return 0 if passed == total else 1
+
+
 def cli(argv):
     import argparse
     p = argparse.ArgumentParser(
         prog='keyoops', description='Manage keyoops keyboard-layout settings.')
     sub = p.add_subparsers(dest='cmd')
     sub.add_parser('list', help='show configured languages + dictionary status')
+    sub.add_parser('selftest', help='run correctness + timing checks')
     a = sub.add_parser('add', help='add a language (auto-downloads its dictionary)')
     a.add_argument('lang', nargs='?', help='language code: ' + ', '.join(LANGUAGES)
                    + ' (omit for a selection menu)')
@@ -674,6 +727,8 @@ def cli(argv):
     args = p.parse_args(argv)
     if args.cmd == 'list':
         return cmd_list()
+    if args.cmd == 'selftest':
+        return cmd_selftest()
     if args.cmd == 'add':
         return cmd_add(args.lang)
     if args.cmd == 'remove':
