@@ -672,11 +672,24 @@ def cmd_selftest():
     """Run built-in cases against the live config: correctness + timing."""
     import time
     codes, overrides, auto_modes = load_config()
+
+    # Avoids letters the Hebrew layout maps to punctuation (w, q) so the
+    # generated he->en scramble below round-trips cleanly.
+    long_en = ('please review the entire changelog and verify that every '
+               'feature is stable before deploying it to production later '
+               'today for all of the existing paid customers on our plan')
+
+    def he_layout(s):  # simulate typing English while a Hebrew layout is active
+        return ''.join(HE_KEYMAP.get(c, c) for c in s.lower())
+
     # (label, prompt, expect_flag, target_needed)
     cases = [
         ('normal English', 'can we ship this feature today', False, None),
+        ('long English', long_en, False, None),
         ('he->en scramble', 'יקךךם add a button', True, 'en'),
+        ('long he->en', he_layout(long_en), True, 'en'),
         ('en->he scramble', 'tz nv eurv gfahu', True, 'he'),
+        ('long en->he', ('tz nv eurv gfahu ' * 5).strip(), True, 'he'),
         ('real Hebrew', 'שלום חבר מה נשמע', False, None),
         ('single word', 'טקד', True, 'en'),
     ]
@@ -687,12 +700,12 @@ def cmd_selftest():
     for _, pr, _, _ in cases:
         detect(pr, codes, overrides, auto_modes, 'default')
 
-    print(f"\n{'case':<18}{'result':<8}{'time':>8}   detail")
-    print('-' * 58)
+    print(f"\n{'case':<18}{'result':<8}{'time':>8}  {'len':>5}  detail")
+    print('-' * 64)
     passed = total = 0
     for label, pr, expect, needs in cases:
         if needs and not resolve_wordlist(needs, overrides):
-            print(f"{label:<18}{'SKIP':<8}{'—':>8}   needs '{needs}' dictionary")
+            print(f"{label:<18}{'SKIP':<8}{'—':>8}  {'—':>5}  needs '{needs}' dictionary")
             continue
         t = time.perf_counter()
         res = detect(pr, codes, overrides, auto_modes, 'default')
@@ -701,8 +714,12 @@ def cmd_selftest():
         total += 1
         passed += ok
         detail = res[0] if res else '(silent)'
-        print(f"{label:<18}{'PASS' if ok else 'FAIL':<8}{ms:>6.0f} ms   {detail}")
-    print('-' * 58)
+        if len(detail) > 42:
+            detail = detail[:39] + '…'
+        chars = len(pr)
+        print(f"{label:<18}{'PASS' if ok else 'FAIL':<8}{ms:>6.0f} ms  "
+              f"{chars:>4}c  {detail}")
+    print('-' * 64)
     print(f"{passed}/{total} passed  ·  timings are in-process; add ~55-65 ms "
           "Python startup for real per-prompt cost")
     return 0 if passed == total else 1
