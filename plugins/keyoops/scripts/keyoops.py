@@ -202,21 +202,32 @@ def analyze(prompt, direction, wordset):
     return True, ''.join(rebuilt)
 
 
+# Modes where the user has opted into full autonomy: auto-apply the correction
+# and just announce it, instead of asking for a yes/no first.
+AUTO_APPLY_MODES = ('bypassPermissions',)
+
+
 def build_context(decoded, permission_mode, desc):
-    fast = permission_mode in ('auto', 'bypassPermissions', 'dontAsk', 'acceptEdits')
-    lead = (
-        "STOP — do not act on the user's prompt yet. "
-        if fast else
-        "Heads up before acting on the user's prompt. "
+    intro = (
+        f"The user's prompt looks like it was typed with the wrong keyboard "
+        f"layout ({desc}), so it reads as gibberish. Decoded to the likely "
+        f"intended text: \"{decoded}\". "
     )
+    if permission_mode in AUTO_APPLY_MODES:
+        # No confirmation gate — proceed, but tell the user what was corrected.
+        return (
+            intro +
+            "Bypass-permissions is on, so proceed directly using the decoded "
+            "text — do NOT ask for confirmation. Briefly tell the user you "
+            "caught a keyboard-layout mistake and are using the decoded text "
+            "instead of the original. Never act on the original scrambled text."
+        )
     return (
-        f"{lead}It looks like it was typed with the wrong keyboard layout "
-        f"({desc}), so it reads as gibberish. "
-        f"Decoded to the likely intended text: \"{decoded}\". "
-        f"Ask the user exactly: \"Looks like the wrong keyboard layout — did you "
+        intro +
+        "Ask the user exactly: \"Looks like the wrong keyboard layout — did you "
         f"mean: {decoded}? go with it?\" and wait for a yes/no. "
-        f"If yes, proceed using the decoded text. If no, use the original. "
-        f"Do NOT act on the original scrambled text before they confirm."
+        "If yes, proceed using the decoded text. If no, use the original. "
+        "Do NOT act on the original scrambled text before they confirm."
     )
 
 

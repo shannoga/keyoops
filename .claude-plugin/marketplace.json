@@ -11,7 +11,7 @@
       "name": "keyoops",
       "source": "./plugins/keyoops",
       "description": "Detects wrong-keyboard-layout typing (e.g. Hebrew keys while intending English) and asks to confirm the decoded text before acting.",
-      "version": "1.1.0",
+      "version": "1.2.0",
       "author": {
         "name": "Shani Hajbi"
       },
