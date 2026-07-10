@@ -72,24 +72,31 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 BUNDLED_EN = os.path.join(SCRIPT_DIR, 'words-en.txt')
 
 # code -> profile. 'wordlist' is a list of candidate paths (first existing wins),
-# so a bundled fallback covers machines lacking a system wordlist.
-# Add a language = one entry here + a target wordlist.
+# so a bundled/downloaded fallback covers machines lacking a system wordlist.
+# 'dict_url' (optional) is auto-downloadable via `keyoops add <lang>`.
+# Add a language = one entry here (+ a dict_url or bundled wordlist).
+_WOOORM = 'https://raw.githubusercontent.com/wooorm/dictionaries/main/dictionaries'
+_LIBRE = 'https://raw.githubusercontent.com/LibreOffice/dictionaries/master'
 LANGUAGES = {
     'en': {'label': 'English', 'key_to_char': EN_KEYMAP, 'script_re': LATIN_RE,
-           'wordlist': ['/usr/share/dict/words', BUNDLED_EN]},
+           'wordlist': ['/usr/share/dict/words', BUNDLED_EN], 'dict_url': None},
     'he': {'label': 'Hebrew',  'key_to_char': HE_KEYMAP, 'script_re': HEBREW_RE,
-           'wordlist': ['/opt/homebrew/share/hunspell/he_IL.dic']},
+           'wordlist': ['/opt/homebrew/share/hunspell/he_IL.dic'],
+           'dict_url': f'{_WOOORM}/he/index.dic'},
     'ar': {'label': 'Arabic',  'key_to_char': AR_KEYMAP, 'script_re': ARABIC_RE,
-           'wordlist': ['/opt/homebrew/share/hunspell/ar.dic']},
+           'wordlist': ['/opt/homebrew/share/hunspell/ar.dic'],
+           'dict_url': f'{_LIBRE}/ar/ar.dic'},
     'ru': {'label': 'Russian', 'key_to_char': RU_KEYMAP, 'script_re': CYRILLIC_RE,
-           'wordlist': ['/opt/homebrew/share/hunspell/ru_RU.dic']},
+           'wordlist': ['/opt/homebrew/share/hunspell/ru_RU.dic'],
+           'dict_url': f'{_WOOORM}/ru/index.dic'},
 }
 
 DEFAULT_LANGUAGES = ['en', 'he']
-# Config lives in the user's home (not next to the script) so a plugin update
-# never clobbers it.
-CONFIG_PATH = os.path.join(os.path.expanduser('~'), '.claude',
-                           'keyoops.config.json')
+# Config + auto-downloaded dictionaries live in the user's home (not next to the
+# script) so a plugin update never clobbers them.
+CLAUDE_DIR = os.path.join(os.path.expanduser('~'), '.claude')
+CONFIG_PATH = os.path.join(CLAUDE_DIR, 'keyoops.config.json')
+DICTS_DIR = os.path.join(CLAUDE_DIR, 'keyoops-dicts')
 
 _EDGE_PUNCT = " \t\r\n\"'`.,!?;:()[]{}<>-–—…/\\|@#*_~"
 
@@ -254,8 +261,15 @@ def _invert(key_to_char):
 
 
 def resolve_wordlist(tgt, overrides):
-    """First existing wordlist path for a target language, or None."""
-    cands = [overrides[tgt]] if tgt in overrides else LANGUAGES[tgt]['wordlist']
+    """First existing wordlist path for a target language, or None.
+
+    Order: explicit config override -> auto-downloaded cache -> system/bundled.
+    """
+    cands = []
+    if tgt in overrides:
+        cands.append(overrides[tgt])
+    cands.append(os.path.join(DICTS_DIR, f'{tgt}.dic'))   # `keyoops add` cache
+    cands.extend(LANGUAGES[tgt]['wordlist'])
     for p in cands:
         if p and os.path.exists(p):
             return p
@@ -318,5 +332,157 @@ def main():
     return 0
 
 
+# --- CLI: manage languages (add / remove / list) ----------------------------
+# Invoked with args (e.g. `keyoops add ru`). With no args it's the hook (above).
+
+def load_config_raw():
+    try:
+        with open(CONFIG_PATH, encoding='utf-8') as f:
+            cfg = json.load(f)
+        if isinstance(cfg, dict):
+            return cfg
+    except (OSError, json.JSONDecodeError, ValueError):
+        pass
+    return {}
+
+
+def write_config(cfg):
+    os.makedirs(CLAUDE_DIR, exist_ok=True)
+    with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
+        f.write('\n')
+
+
+def config_langs(cfg):
+    langs = cfg.get('languages')
+    if isinstance(langs, str):
+        langs = langs.split(',')
+    if not isinstance(langs, list):
+        langs = list(DEFAULT_LANGUAGES)
+    out, seen = [], set()
+    for c in langs:
+        c = str(c).strip().lower()
+        if c and c not in seen:
+            seen.add(c)
+            out.append(c)
+    return out or list(DEFAULT_LANGUAGES)
+
+
+def download_dict(code):
+    """Fetch a language's dictionary into the cache. Returns (ok, path_or_error)."""
+    url = LANGUAGES.get(code, {}).get('dict_url')
+    if not url:
+        return False, 'no downloadable dictionary for this language'
+    import urllib.request
+    os.makedirs(DICTS_DIR, exist_ok=True)
+    dest = os.path.join(DICTS_DIR, f'{code}.dic')
+    tmp = dest + '.tmp'
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': 'keyoops'})
+        with urllib.request.urlopen(req, timeout=30) as r, open(tmp, 'wb') as out:
+            out.write(r.read())
+        os.replace(tmp, dest)
+        return True, dest
+    except Exception as e:  # network/IO — report, don't crash
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return False, str(e)
+
+
+def _overrides(cfg):
+    ov = cfg.get('wordlists')
+    return ov if isinstance(ov, dict) else {}
+
+
+def cmd_list():
+    cfg = load_config_raw()
+    langs = config_langs(cfg)
+    overrides = _overrides(cfg)
+    print('keyoops languages:', ', '.join(langs))
+    print('dictionary status (needed only when a language is a decode *target*):')
+    for code in langs:
+        if code not in LANGUAGES:
+            print(f'  {code}: unknown language (ignored)')
+            continue
+        label = LANGUAGES[code]['label']
+        wl = resolve_wordlist(code, overrides)
+        if wl:
+            print(f'  {code} ({label}): ready  [{wl}]')
+        elif LANGUAGES[code].get('dict_url'):
+            print(f'  {code} ({label}): missing — run `keyoops add {code}` to download')
+        else:
+            print(f'  {code} ({label}): no dictionary available')
+    return 0
+
+
+def cmd_add(code):
+    code = code.strip().lower()
+    if code not in LANGUAGES:
+        print(f"unknown language '{code}'. supported: {', '.join(LANGUAGES)}")
+        return 1
+    cfg = load_config_raw()
+    langs = config_langs(cfg)
+    if code not in langs:
+        langs.append(code)
+    cfg['languages'] = langs
+    write_config(cfg)
+    print(f"added '{code}' ({LANGUAGES[code]['label']}). languages: {', '.join(langs)}")
+    if resolve_wordlist(code, _overrides(cfg)):
+        print(f"dictionary ready: {resolve_wordlist(code, _overrides(cfg))}")
+    elif LANGUAGES[code].get('dict_url'):
+        print('downloading dictionary…')
+        ok, info = download_dict(code)
+        if ok:
+            print(f'  saved to {info}')
+        else:
+            print(f'  download failed: {info}')
+            print(f"  you can set a manual path under 'wordlists' in {CONFIG_PATH}")
+    else:
+        print('no dictionary needed / available.')
+    print('Active on your next prompt — no restart needed.')
+    return 0
+
+
+def cmd_remove(code):
+    code = code.strip().lower()
+    cfg = load_config_raw()
+    langs = config_langs(cfg)
+    if code not in langs:
+        print(f"'{code}' is not in your languages: {', '.join(langs)}")
+        return 0
+    langs = [c for c in langs if c != code]
+    cfg['languages'] = langs
+    write_config(cfg)
+    print(f"removed '{code}'. languages: {', '.join(langs) or '(none)'}")
+    print('Active on your next prompt. (Any downloaded dictionary stays cached.)')
+    return 0
+
+
+def cli(argv):
+    import argparse
+    p = argparse.ArgumentParser(
+        prog='keyoops', description='Manage keyoops keyboard-layout languages.')
+    sub = p.add_subparsers(dest='cmd')
+    sub.add_parser('list', help='show configured languages + dictionary status')
+    a = sub.add_parser('add', help='add a language (auto-downloads its dictionary)')
+    a.add_argument('lang', help='language code: ' + ', '.join(LANGUAGES))
+    r = sub.add_parser('remove', help='remove a language')
+    r.add_argument('lang')
+    args = p.parse_args(argv)
+    if args.cmd == 'list':
+        return cmd_list()
+    if args.cmd == 'add':
+        return cmd_add(args.lang)
+    if args.cmd == 'remove':
+        return cmd_remove(args.lang)
+    p.print_help()
+    return 0
+
+
 if __name__ == '__main__':
+    # Args -> management CLI; no args -> UserPromptSubmit hook (reads stdin).
+    if len(sys.argv) > 1:
+        sys.exit(cli(sys.argv[1:]))
     sys.exit(main())

@@ -23,44 +23,54 @@ out, it flags; otherwise it stays silent. It **never blocks** — worst case is 
 The hook registers automatically — no `settings.json` editing. Restart your
 session and it's active. Requires `python3` (preinstalled on macOS and most Linux).
 
-## Configure (optional)
+## Configure — the `/keyoops` command
 
-By default it catches **Hebrew-layout → English**. To change which languages it
-watches, copy the example config to your home and edit it:
+By default it catches **Hebrew-layout → English**. Manage which languages it
+watches right from Claude Code — no file editing:
 
 ```
-cp "$(/plugin root keyoops)/keyoops.config.example.json" \
-   ~/.claude/keyoops.config.json
+/keyoops list            # show your languages + dictionary status
+/keyoops add ru          # add Russian (auto-downloads its dictionary)
+/keyoops remove ru       # remove Russian
 ```
 
-Then list the languages you type:
+Supported codes: `en`, `he`, `ar`, `ru`. Changes take effect on your **next
+prompt** — no restart needed. The hook checks **every ordered pair** among your
+languages: for each language your layout might have been ON, it decodes to each
+*other* language and flags real words.
 
-```json
-{ "languages": ["en", "he", "ru"] }
-```
+`add` automatically downloads the language's dictionary when one is needed (see
+below), so `/keyoops add he` is all it takes to start catching Hebrew targets.
 
-The hook checks **every ordered pair** among them — for each language your layout
-might have been ON, it decodes to each *other* language and flags real words.
-Supported codes: `en`, `he`, `ar`, `ru`.
+Everything is stored under `~/.claude/` (`keyoops.config.json` +
+`keyoops-dicts/`), so plugin updates never overwrite your settings.
 
-Config lives in `~/.claude/` so plugin updates never overwrite it.
+### Not using the plugin command?
 
-## Non-English targets (installing a dictionary)
-
-English works out of the box — a wordlist ships inside the plugin. To detect
-gibberish that decodes to **real Hebrew / Arabic / Russian**, that language needs
-its own wordlist, because those don't ship with macOS.
-
-A "dictionary" here is just a plain text file with one word per line. Install one
-via [hunspell](https://github.com/hunspell) dictionaries, then point the config at
-the `.dic` file:
+You can run the same CLI directly on any install:
 
 ```bash
-# macOS
-brew install hunspell
-# then grab a dictionary, e.g. Hebrew, and note its path:
-#   /opt/homebrew/share/hunspell/he_IL.dic
+python3 "$(/plugin root keyoops)/scripts/keyoops.py" add ru
 ```
+
+## Dictionaries (auto-downloaded)
+
+English works out of the box — a wordlist ships inside the plugin. Detecting
+gibberish that decodes to **real Hebrew / Arabic / Russian** needs that
+language's wordlist, which `/keyoops add <lang>` downloads for you into
+`~/.claude/keyoops-dicts/`:
+
+| Language | Source |
+|----------|--------|
+| Hebrew (`he`) | wooorm/dictionaries |
+| Russian (`ru`) | wooorm/dictionaries |
+| Arabic (`ar`) | LibreOffice/dictionaries |
+
+Dictionaries are fetched at install-time to your machine (not redistributed in
+this repo), each under its own upstream license.
+
+**Prefer your own wordlist?** Point the config at any one-word-per-line file
+(hunspell `.dic`, aspell dump, custom list):
 
 ```json
 {
@@ -69,9 +79,8 @@ brew install hunspell
 }
 ```
 
-Any one-word-per-line text file works — a hunspell `.dic`, an aspell dump, or your
-own list. If the path in `wordlists` doesn't exist, that direction is simply
-skipped (never an error).
+If a wordlist can't be found for a language, that direction is simply skipped —
+never an error.
 
 ## How it stays quiet on real text
 
