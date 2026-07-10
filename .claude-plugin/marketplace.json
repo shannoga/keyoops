@@ -1,0 +1,21 @@
+{
+  "name": "layout-scramble",
+  "owner": {
+    "name": "Shani Hajbi"
+  },
+  "metadata": {
+    "description": "Catch prompts typed with the wrong keyboard layout and offer the intended text."
+  },
+  "plugins": [
+    {
+      "name": "layout-scramble",
+      "source": "./plugins/layout-scramble",
+      "description": "Detects wrong-keyboard-layout typing (e.g. Hebrew keys while intending English) and asks to confirm the decoded text before acting.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Shani Hajbi"
+      },
+      "category": "productivity"
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "_help": [
+    "OPTIONAL config. Copy this file to  ~/.claude/layout-scramble.config.json  and edit.",
+    "List the languages YOU type in 'languages'. The hook checks every pair:",
+    "for each language the layout might have been ON, it decodes to each other",
+    "language and flags if real words fall out. Codes: en, he, ar, ru.",
+    "A direction only runs if the TARGET language's wordlist exists.",
+    "English works out of the box (bundled wordlist). For he/ar/ru as a TARGET,",
+    "install a wordlist and point 'wordlists' at it, e.g.:",
+    "  \"wordlists\": { \"he\": \"/opt/homebrew/share/hunspell/he_IL.dic\" }",
+    "With no config file at all, the default is [\"en\", \"he\"]."
+  ],
+  "languages": ["en", "he"],
+  "wordlists": {}
+}
