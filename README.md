@@ -102,12 +102,20 @@ this repo), each under its own upstream license.
 If a wordlist can't be found for a language, that direction is simply skipped —
 never an error.
 
-## How it stays quiet on real text
+## How it decides to fire
+
+keyoops only fires when **every letter in the message is one script** (a "pure"
+scramble — no mixed-language messages) **and** decoding the whole thing yields
+mostly real words in another language. So:
 
 - Real Hebrew/Russian/Arabic reverse-maps to gibberish, not words → ignored.
-- Intentional mixing (`add כפתור to the page`) → ignored.
-- A lone word that coincidentally decodes → ignored (needs a contiguous run or a
-  full-message slip to fire).
+- Mixed messages (`add כפתור to the page`) → ignored (not one script).
+- A normal English sentence stays English when decoded → ignored.
+
+Once it *does* fire, the **entire** message is decoded by the key mapping —
+including loanwords, names, or words not in the dictionary (the dictionary is
+only used to *decide* whether it was a scramble). Claude reads the full decode
+and renders your intended text.
 
 ## What it does not do
 

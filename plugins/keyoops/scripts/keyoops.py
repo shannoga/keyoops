@@ -159,10 +159,6 @@ def load_wordset(path):
     return words
 
 
-def decode(text, char_map):
-    return ''.join(char_map.get(ch, ch) for ch in text)
-
-
 def core(tok):
     """Strip edge punctuation so the wordlist test sees just the word."""
     return tok.strip(_EDGE_PUNCT)
@@ -179,76 +175,43 @@ def longest_run(indices):
     return best
 
 
+DETECT_THRESHOLD = 0.6  # fraction of decoded words that must be real target words
+
+
 def analyze(prompt, direction, wordset):
-    """Return (should_flag, decoded_prompt) for one direction."""
+    """Return (should_flag, decoded_prompt, pure) for one direction.
+
+    Fires only on a PURE single-language scramble: every alphabetic character is
+    in this direction's source script (no mixed-language messages), AND decoding
+    the whole message yields at least DETECT_THRESHOLD real target-language words.
+    When it fires, the ENTIRE message is decoded — including words not in the
+    dictionary (loanwords, names) — since the char mapping is correct regardless;
+    the dictionary is only used to *decide* whether this was a scramble.
+    """
     char_map = direction['char_map']
     src_re = direction['src_re']
 
-    # Split keeping whitespace so we can reconstruct spacing exactly.
-    parts = re.split(r'(\s+)', prompt)
-    tokens = []          # (part_index, is_scrambled, decoded_part, has_src, strong)
-    for i, part in enumerate(parts):
-        if not part or part.isspace():
-            continue
-        c = core(part)
-        if not c:
-            tokens.append((i, False, part, False, False))
-            continue
-        has_src = bool(src_re.search(c))
-        if c.lower() in wordset:                       # already a real word
-            tokens.append((i, False, part, has_src, False))
-        elif has_src:
-            dec_core = core(decode(c, char_map))
-            if dec_core.lower() in wordset:            # decodes to a real target word
-                # "strong" = a >=3 char decode; short decodes (a, as, to -> real
-                # but tiny target words) are coincidence-prone and don't carry a
-                # flag on their own.
-                strong = len(dec_core) >= 3
-                tokens.append((i, True, decode(part, char_map), True, strong))
-            else:
-                tokens.append((i, False, part, True, False))  # genuine source-lang
-        else:
-            tokens.append((i, False, part, has_src, False))
+    alpha = [c for c in prompt if c.isalpha()]
+    if not alpha:
+        return False, prompt, True
+    # Every letter must be in the source script — this is the "same language"
+    # gate: a message mixing scripts never fires.
+    if not all(src_re.match(c) for c in alpha):
+        return False, prompt, False
 
-    scrambled_pos = [n for n, t in enumerate(tokens) if t[1]]
-    strong_pos = [n for n, t in enumerate(tokens) if t[4]]
-    src_pos = [n for n, t in enumerate(tokens) if t[3]]
+    decoded = ''.join(char_map.get(c, c) for c in prompt)
+    words = [core(t) for t in re.split(r'\s+', decoded)]
+    words = [w for w in words if w and any(ch.isalpha() for ch in w)]
+    if not words:
+        return False, prompt, True
+    # Lone short word is coincidence-prone — require a real, non-trivial decode.
+    if len(words) == 1 and len(words[0]) < 3:
+        return False, prompt, True
 
-    # "pure" = the whole message is in the source script (no foreign real words
-    # mixed in). Used to gate auto-apply: only fully-scrambled messages skip the
-    # confirmation, mixed ones always ask.
-    pure = True
-    for part in parts:
-        if not part or part.isspace():
-            continue
-        c = core(part)
-        if any(ch.isalpha() for ch in c) and not src_re.search(c):
-            pure = False
-            break
-
-    if not scrambled_pos:
-        return False, prompt, pure
-
-    # --- Anti-false-positive gate ---
-    if len(tokens) == 1:
-        # Lone word: require a strong (>=3 char) decode. Cheap even if wrong —
-        # Claude still asks first.
-        flag = bool(strong_pos)
-    else:
-        # Real evidence = a contiguous run of >=2 STRONG decodes, OR a full slip
-        # where every source-script token decodes (and at least one is strong).
-        # A couple of scattered short coincidences never fire.
-        flag = (longest_run(strong_pos) >= 2
-                or (len(scrambled_pos) >= len(src_pos) and bool(strong_pos)))
-
-    if not flag:
-        return False, prompt, pure
-
-    rebuilt = list(parts)
-    for part_index, is_scr, decoded_part, _, _ in tokens:
-        if is_scr:
-            rebuilt[part_index] = decoded_part
-    return True, ''.join(rebuilt), pure
+    hits = sum(1 for w in words if w.lower() in wordset)
+    if hits / len(words) >= DETECT_THRESHOLD:
+        return True, decoded, True
+    return False, prompt, True
 
 
 # Permission modes eligible for auto-apply by default. Overridable in config via
@@ -262,8 +225,11 @@ VALID_MODES = ('default', 'plan', 'acceptEdits', 'auto', 'dontAsk',
 def build_context(decoded, desc, auto):
     intro = (
         f"The user's prompt looks like it was typed with the wrong keyboard "
-        f"layout ({desc}), so it reads as gibberish. Decoded to the likely "
-        f"intended text: \"{decoded}\". "
+        f"layout ({desc}), so it reads as gibberish. Direct key-remap decode: "
+        f"\"{decoded}\". This decode is mechanical, so any loanwords, names, or "
+        f"words not in the dictionary are also mapped correctly — read the whole "
+        f"thing and treat it as the user's intended text (fix only obvious "
+        f"remap artifacts). "
     )
     if auto:
         # No confirmation gate — proceed, but tell the user what was corrected.
@@ -675,9 +641,9 @@ def cmd_selftest():
 
     # Avoids letters the Hebrew layout maps to punctuation (w, q) so the
     # generated he->en scramble below round-trips cleanly.
-    long_en = ('please review the entire changelog and verify that every '
+    long_en = ('please check the entire changelog and verify that every '
                'feature is stable before deploying it to production later '
-               'today for all of the existing paid customers on our plan')
+               'today for all of the existing paid clients on our team')
 
     def he_layout(s):  # simulate typing English while a Hebrew layout is active
         return ''.join(HE_KEYMAP.get(c, c) for c in s.lower())
@@ -686,10 +652,11 @@ def cmd_selftest():
     cases = [
         ('normal English', 'can we ship this feature today', False, None),
         ('long English', long_en, False, None),
-        ('he->en scramble', 'יקךךם add a button', True, 'en'),
+        ('he->en scramble', he_layout('add a button here'), True, 'en'),
         ('long he->en', he_layout(long_en), True, 'en'),
         ('en->he scramble', 'tz nv eurv gfahu', True, 'he'),
         ('long en->he', ('tz nv eurv gfahu ' * 5).strip(), True, 'he'),
+        ('mixed (ignored)', 'יקךךם add a button', False, None),
         ('real Hebrew', 'שלום חבר מה נשמע', False, None),
         ('single word', 'טקד', True, 'en'),
     ]
