@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Thin wrapper so the demo can call `keyoops <cmd>` without a global install.
+exec python3 "$(dirname "$0")/../plugins/keyoops/scripts/keyoops.py" "$@"

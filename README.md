@@ -2,6 +2,8 @@
 
 A Claude Code plugin that catches prompts typed with the **wrong keyboard layout**.
 
+![keyoops demo](demo/keyoops.gif)
+
 You meant to type English but the OS was on Hebrew, so `hello` came out as `יקךךם`?
 `keyoops` notices, decodes it back to what you meant, and asks Claude to confirm
 before doing anything:
