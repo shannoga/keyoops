@@ -10,9 +10,9 @@ injects a note asking Claude to confirm the decoded text before acting on it.
 Detection is pure code (no model): reverse-map, then check tokens against a
 wordlist. It never blocks — worst case is one "did you mean X?" you decline.
 
-Reads the hook JSON from stdin (fields: `prompt`, `permission_mode`). On a
-confident hit, prints a hookSpecificOutput JSON with `additionalContext` and
-exits 0. Otherwise prints nothing and exits 0.
+Reads the hook JSON from stdin (field: `prompt`). On a confident hit, prints a
+hookSpecificOutput JSON with `additionalContext` and exits 0. Otherwise prints
+nothing and exits 0.
 
 You declare the languages you type in an optional config file,
 ~/.claude/keyoops.config.json (e.g. {"languages":["he","en","ar"]}). The hook
@@ -214,12 +214,11 @@ def analyze(prompt, direction, wordset):
     return False, prompt, True
 
 
-# Permission modes eligible for auto-apply by default. Overridable in config via
-# "auto_apply_modes". Valid modes: default, plan, acceptEdits, auto, dontAsk,
-# bypassPermissions. ("dontAsk" is available but off by default.)
-DEFAULT_AUTO_APPLY_MODES = ['bypassPermissions']
-VALID_MODES = ('default', 'plan', 'acceptEdits', 'auto', 'dontAsk',
-               'bypassPermissions')
+# Whether corrections auto-apply (skip the y/n confirmation) by default. A simple
+# on/off switch, independent of Claude's permission mode. Even when ON, only PURE
+# single-language scrambles auto-apply; mixed-language messages always ask, as a
+# safety net. Overridable in config via "auto_apply" (bool).
+DEFAULT_AUTO_APPLY = False
 
 
 def build_context(decoded, desc, auto):
@@ -249,14 +248,34 @@ def build_context(decoded, desc, auto):
     )
 
 
+def _read_auto_apply(cfg):
+    """Interpret the auto-apply setting from a config dict as a bool.
+
+    Prefers the simple boolean "auto_apply". Falls back to the legacy
+    "auto_apply_modes" list (any mode listed -> on) so pre-existing configs keep
+    working without an edit.
+    """
+    val = cfg.get('auto_apply')
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, str):
+        return val.strip().lower() in ('on', 'true', 'yes', '1')
+    legacy = cfg.get('auto_apply_modes')
+    if isinstance(legacy, str):
+        legacy = [m for m in legacy.split(',') if m.strip()]
+    if isinstance(legacy, list):
+        return len(legacy) > 0
+    return DEFAULT_AUTO_APPLY
+
+
 def load_config():
-    """Read the optional config file. Returns (codes, overrides, auto_apply_modes).
+    """Read the optional config file. Returns (codes, overrides, auto_apply).
 
     Config shape (all fields optional):
         {
           "languages": ["he", "en", "ar"],
           "wordlists": {"he": "/path/to/he_IL.dic", "ar": "/path/to/ar.dic"},
-          "auto_apply_modes": ["bypassPermissions"]
+          "auto_apply": true
         }
     'languages' may also be a comma string ("he,en,ar"). Missing/unreadable/
     invalid config falls back to the defaults, so a bad edit never breaks
@@ -266,7 +285,7 @@ def load_config():
         with open(CONFIG_PATH, encoding='utf-8') as f:
             cfg = json.load(f)
     except (OSError, json.JSONDecodeError, ValueError):
-        return DEFAULT_LANGUAGES, {}, list(DEFAULT_AUTO_APPLY_MODES)
+        return DEFAULT_LANGUAGES, {}, DEFAULT_AUTO_APPLY
     langs = cfg.get('languages')
     if isinstance(langs, str):
         langs = langs.split(',')
@@ -284,15 +303,7 @@ def load_config():
     overrides = cfg.get('wordlists')
     if not isinstance(overrides, dict):
         overrides = {}
-    # auto_apply_modes: absent -> default; explicit [] -> never auto-apply.
-    modes = cfg.get('auto_apply_modes')
-    if isinstance(modes, str):
-        modes = modes.split(',')
-    if not isinstance(modes, list):
-        auto_modes = list(DEFAULT_AUTO_APPLY_MODES)
-    else:
-        auto_modes = [str(m).strip() for m in modes if str(m).strip() in VALID_MODES]
-    return codes, overrides, auto_modes
+    return codes, overrides, _read_auto_apply(cfg)
 
 
 def _invert(key_to_char):
@@ -362,7 +373,7 @@ def skippable_latin_direction(prompt, en_wordset):
     return longest_run(non_en) < 2
 
 
-def detect(prompt, codes, overrides, auto_modes, permission_mode):
+def detect(prompt, codes, overrides, auto_apply):
     """Core detection shared by the hook and `selftest`.
 
     Returns (decoded, desc, auto) for the first firing direction, else None.
@@ -405,9 +416,9 @@ def detect(prompt, codes, overrides, auto_modes, permission_mode):
             continue
         flagged, decoded, pure = analyze(prompt, direction, wordset)
         if flagged and decoded.strip() and decoded != prompt:
-            # Auto-apply only when the mode allows it AND the message is a pure
-            # single-language scramble (mixed messages always ask, to be safe).
-            auto = permission_mode in auto_modes and pure
+            # Auto-apply only when enabled AND the message is a pure single-
+            # language scramble (mixed messages always ask, to be safe).
+            auto = auto_apply and pure
             return decoded, direction['desc'], auto
     return None
 
@@ -418,12 +429,11 @@ def main():
     except (json.JSONDecodeError, ValueError):
         return 0
     prompt = data.get('prompt') or ''
-    permission_mode = data.get('permission_mode') or 'default'
     if not prompt.strip():
         return 0
 
-    codes, overrides, auto_modes = load_config()
-    res = detect(prompt, codes, overrides, auto_modes, permission_mode)
+    codes, overrides, auto_apply = load_config()
+    res = detect(prompt, codes, overrides, auto_apply)
     if res:
         decoded, desc, auto = res
         out = {
@@ -518,11 +528,8 @@ def cmd_list():
             print(f'  {code} ({label}): missing — run `keyoops add {code}` to download')
         else:
             print(f'  {code} ({label}): no dictionary available')
-    modes = cfg.get('auto_apply_modes')
-    if not isinstance(modes, list):
-        modes = DEFAULT_AUTO_APPLY_MODES
-    shown = ', '.join(modes) if modes else '(none — always ask)'
-    print(f'auto-apply (skip confirmation) in modes: {shown}')
+    on = _read_auto_apply(cfg)
+    print(f"auto-apply (skip confirmation): {'on' if on else 'off (always ask)'}")
     return 0
 
 
@@ -597,39 +604,26 @@ def cmd_remove(code):
 
 
 def cmd_autoapply(spec=None):
-    """Show or set the permission modes where corrections auto-apply (no y/n)."""
+    """Show or set whether corrections auto-apply (no y/n). Simple on/off."""
     cfg = load_config_raw()
     if spec is None:
-        modes = cfg.get('auto_apply_modes')
-        if not isinstance(modes, list):
-            modes = DEFAULT_AUTO_APPLY_MODES
-        print('auto-apply modes:', ', '.join(modes) if modes else '(none — always ask)')
-        print('valid modes:', ', '.join(VALID_MODES))
-        print('set with: keyoops autoapply <mode[,mode…] | off | default>')
+        on = _read_auto_apply(cfg)
+        print(f"auto-apply: {'on' if on else 'off (always ask)'}")
+        print('set with: keyoops autoapply <on | off>')
         return 0
     spec = spec.strip().lower()
-    if spec in ('off', 'none'):
-        modes = []
-    elif spec == 'default':
-        modes = list(DEFAULT_AUTO_APPLY_MODES)
+    if spec in ('on', 'true', 'yes', '1', 'enable', 'enabled'):
+        on = True
+    elif spec in ('off', 'none', 'false', 'no', '0', 'disable', 'disabled', 'default'):
+        on = False
     else:
-        requested = [m.strip() for m in spec.split(',') if m.strip()]
-        valid_lower = {m.lower(): m for m in VALID_MODES}
-        bad = [m for m in requested if m.lower() not in valid_lower]
-        if bad:
-            print(f"unknown mode(s): {', '.join(bad)}")
-            print('valid modes:', ', '.join(VALID_MODES))
-            return 1
-        # dedupe, preserve canonical casing
-        seen, modes = set(), []
-        for m in requested:
-            canon = valid_lower[m.lower()]
-            if canon not in seen:
-                seen.add(canon)
-                modes.append(canon)
-    cfg['auto_apply_modes'] = modes
+        print(f"unknown value: {spec}")
+        print('set with: keyoops autoapply <on | off>')
+        return 1
+    cfg['auto_apply'] = on
+    cfg.pop('auto_apply_modes', None)  # retire the legacy field
     write_config(cfg)
-    print('auto-apply modes:', ', '.join(modes) if modes else '(none — always ask)')
+    print(f"auto-apply: {'on' if on else 'off (always ask)'}")
     print('Active on your next prompt.')
     return 0
 
@@ -637,7 +631,7 @@ def cmd_autoapply(spec=None):
 def cmd_selftest():
     """Run built-in cases against the live config: correctness + timing."""
     import time
-    codes, overrides, auto_modes = load_config()
+    codes, overrides, auto_apply = load_config()
 
     # Avoids letters the Hebrew layout maps to punctuation (w, q) so the
     # generated he->en scramble below round-trips cleanly.
@@ -662,10 +656,10 @@ def cmd_selftest():
     ]
     print('keyoops self-test')
     print('languages:', ', '.join(codes),
-          '| auto-apply:', ', '.join(auto_modes) or '(none)')
+          '| auto-apply:', 'on' if auto_apply else 'off')
     # warm caches once so timings reflect steady state
     for _, pr, _, _ in cases:
-        detect(pr, codes, overrides, auto_modes, 'default')
+        detect(pr, codes, overrides, auto_apply)
 
     print(f"\n{'case':<18}{'result':<8}{'time':>8}  {'len':>5}  detail")
     print('-' * 64)
@@ -675,7 +669,7 @@ def cmd_selftest():
             print(f"{label:<18}{'SKIP':<8}{'—':>8}  {'—':>5}  needs '{needs}' dictionary")
             continue
         t = time.perf_counter()
-        res = detect(pr, codes, overrides, auto_modes, 'default')
+        res = detect(pr, codes, overrides, auto_apply)
         ms = (time.perf_counter() - t) * 1000
         ok = (res is not None) == expect
         total += 1
@@ -705,8 +699,8 @@ def cli(argv):
     r = sub.add_parser('remove', help='remove a language')
     r.add_argument('lang')
     aa = sub.add_parser('autoapply',
-                        help='show/set modes that skip confirmation (e.g. '
-                             'bypassPermissions,dontAsk | off | default)')
+                        help='show/set whether corrections skip confirmation '
+                             '(on | off)')
     aa.add_argument('modes', nargs='?')
     args = p.parse_args(argv)
     if args.cmd == 'list':

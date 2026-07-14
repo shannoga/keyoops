@@ -31,30 +31,29 @@ By default it catches **Hebrew-layout → English**. Manage which languages it
 watches right from Claude Code — no file editing:
 
 ```
-/keyoops list            # show your languages + dictionary status + auto-apply modes
+/keyoops list            # show your languages + dictionary status + auto-apply state
 /keyoops add             # pick a language from a menu (auto-downloads its dictionary)
 /keyoops add ru          # …or name it directly
 /keyoops remove ru       # remove Russian
-/keyoops autoapply       # show/set which modes skip the confirmation (see below)
+/keyoops autoapply       # show/set whether corrections skip the confirmation (see below)
 ```
 
 ### Skipping confirmation (auto-apply)
 
 Normally keyoops asks *"did you mean X? go with it?"* before using the decoded
-text. In modes where you've opted into autonomy it can instead **apply the fix
-and just tell you** — no yes/no. This is on for **`bypassPermissions`** by
-default, and **only for pure single-language scrambles** (a message that mixes
-languages always asks, to be safe).
+text. Turn auto-apply **on** and it instead **applies the fix and just tells
+you** — no yes/no. It's a simple on/off switch (independent of Claude's
+permission mode), **off by default**, and even when on it only auto-applies
+**pure single-language scrambles** (a message that mixes languages always asks,
+to be safe).
 
 ```
-/keyoops autoapply                          # show current modes
-/keyoops autoapply bypassPermissions,dontAsk  # also skip in dontAsk mode
-/keyoops autoapply off                      # always ask
-/keyoops autoapply default                  # reset to [bypassPermissions]
+/keyoops autoapply       # show current state
+/keyoops autoapply on    # apply corrections without asking
+/keyoops autoapply off   # always ask (default)
 ```
 
-Valid modes: `default`, `plan`, `acceptEdits`, `auto`, `dontAsk`,
-`bypassPermissions`. (Same as the `auto_apply_modes` config key.)
+(Same as the `auto_apply` boolean config key.)
 
 Supported codes: `en`, `he`, `ar`, `ru`. Changes take effect on your **next
 prompt** — no restart needed. The hook checks **every ordered pair** among your
