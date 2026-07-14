@@ -1,6 +1,6 @@
 ---
-description: Manage keyoops — list/add/remove keyboard-layout languages, set autoapply modes, or run selftest
-argument-hint: "[list | add [lang] | remove <lang> | autoapply [modes|off|default] | selftest]"
+description: Manage keyoops — list/add/remove keyboard-layout languages, turn autoapply on/off, or run selftest
+argument-hint: "[list | add [lang] | remove <lang> | autoapply [on|off] | selftest]"
 allowed-tools: Bash, AskUserQuestion
 ---
 
@@ -23,15 +23,14 @@ Decide what to do from the arguments the user gave (`$ARGUMENTS`):
   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/keyoops.py" add <code>
   ```
 
-- **`autoapply` with NO modes** → show the current setting:
+- **`autoapply` with NO value** → show the current setting:
   ```bash
   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/keyoops.py" autoapply
   ```
-  `autoapply` controls which permission modes apply a correction WITHOUT asking
-  (Claude just announces it). Only pure single-language scrambles auto-apply;
-  mixed messages always ask. Valid modes: `default`, `plan`, `acceptEdits`,
-  `auto`, `dontAsk`, `bypassPermissions`. Set with e.g.
-  `autoapply bypassPermissions,dontAsk`, `autoapply off`, or `autoapply default`.
+  `autoapply` is a simple on/off switch (independent of Claude's permission mode)
+  for whether a correction is applied WITHOUT asking (Claude just announces it)
+  or always asks first. Only pure single-language scrambles auto-apply; mixed
+  messages always ask. Set with `autoapply on` or `autoapply off`.
 
 - **`selftest`** → run built-in correctness + timing checks:
   ```bash
@@ -39,7 +38,7 @@ Decide what to do from the arguments the user gave (`$ARGUMENTS`):
   ```
 
 - **Anything else** (`add <lang>`, `remove <lang>`, `list`, `selftest`,
-  `autoapply <modes|off|default>`) → run the script with those arguments directly:
+  `autoapply <on|off>`) → run the script with those arguments directly:
   ```bash
   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/keyoops.py" $ARGUMENTS
   ```
